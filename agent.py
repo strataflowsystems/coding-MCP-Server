@@ -22,22 +22,30 @@ OLLAMA_URL    = "http://localhost:11434"
 MCP_URL       = "http://localhost:3001/mcp"
 MODEL         = "gemma4-coder"       # use the tuned modelfile; fallback: gemma4:26b
 MAX_TURNS     = 40                   # hard ceiling on tool-call rounds
+MAX_NUDGES    = 3                    # max times we re-prompt Gemma if she narrates instead of acts
 TIMEOUT       = 120                  # seconds per Ollama call
 
 SYSTEM_PROMPT = textwrap.dedent("""\
-    You are an autonomous coding agent with access to a set of tools that let
-    you read, search, and edit files; run shell commands; manage git; run builds
-    and tests; and query databases.
+    You are an autonomous coding agent. You act — you do not describe, explain, or ask for permission.
 
-    Rules:
-    - ALWAYS use tools — never describe what you would do, just do it.
-    - Start every task with tree() or get_project_context() to orient yourself.
-    - Use search_files() before reading files — never guess file paths.
-    - Use replace_in_file() for edits, not write_file() (which overwrites).
-    - Use read_file_range() on large files — call count_file_lines() first.
-    - After making changes, run the relevant tests or build to verify.
-    - When the task is fully done, say DONE and summarise what you changed.
-    - If you are stuck or blocked, say BLOCKED and explain why.
+    CORE RULES:
+    - Every response must either call a tool OR end with DONE or BLOCKED.
+    - If you are about to write a sentence without calling a tool, stop and call a tool instead.
+    - Never say "I would", "I could", "I will", "Let me" — just do it.
+    - Never ask the user if they want you to proceed. Proceed.
+    - Never summarise a plan before acting. Act first.
+
+    WORKFLOW:
+    1. Orient: call tree() or get_project_context() on the target path first.
+    2. Locate: use search_files() before reading anything — never guess paths.
+    3. Inspect: use read_file_range() + count_file_lines() on large files, not read_file().
+    4. Edit: use replace_in_file() for changes, not write_file() (which overwrites).
+    5. Verify: run tests or build after every change.
+    6. Finish: when the task is fully complete say DONE and state what changed.
+       If genuinely stuck say BLOCKED and state exactly why.
+
+    You have tools for everything: filesystem, search, git, npm, docker, databases, HTTP.
+    Use them without hesitation.
 """)
 
 
@@ -136,18 +144,38 @@ def run(user_prompt: str, verbose: bool = True) -> str:
         {"role": "user",   "content": user_prompt},
     ]
 
+    nudges = 0
+
     for turn in range(MAX_TURNS):
         print(f"\n[turn {turn + 1}/{MAX_TURNS}] Calling Gemma...")
         msg = chat(messages, tools)
         messages.append(msg)
 
         tool_calls = msg.get("tool_calls", [])
+        content    = msg.get("content", "").strip()
 
         if not tool_calls:
-            # Gemma finished — no more tool calls
-            content = msg.get("content", "")
-            print(f"\n[agent] Final response:\n{content}")
-            return content
+            # Check for explicit completion signals
+            upper = content.upper()
+            if "DONE" in upper or "BLOCKED" in upper:
+                print(f"\n[agent] {content}")
+                return content
+
+            # Gemma narrated instead of acting — nudge her back
+            nudges += 1
+            if nudges >= MAX_NUDGES:
+                print(f"\n[agent] Gemma stopped acting after {nudges} nudges. Last response:\n{content}")
+                return content
+
+            nudge_msg = (
+                "You haven't finished the task and you haven't called any tools. "
+                "Do not explain — use the appropriate tools to continue right now."
+            )
+            print(f"  [nudge {nudges}/{MAX_NUDGES}] Gemma went text-only, re-prompting...")
+            messages.append({"role": "user", "content": nudge_msg})
+            continue
+
+        nudges = 0  # reset nudge counter on any tool call
 
         # Execute each tool call
         for tc in tool_calls:
@@ -163,7 +191,8 @@ def run(user_prompt: str, verbose: bool = True) -> str:
             print(f"  >> {name}({_fmt_args(args)})")
             result = call_tool(name, args)
             truncated = result[:500] + "..." if len(result) > 500 else result
-            print(f"     {truncated}")
+            safe = truncated.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8", errors="replace")
+            print(f"     {safe}")
 
             messages.append({
                 "role": "tool",
@@ -201,14 +230,24 @@ def interactive_loop():
 
         messages.append({"role": "user", "content": user_input})
 
+        nudges = 0
         for turn in range(MAX_TURNS):
             msg = chat(messages, tools)
             messages.append(msg)
             tool_calls = msg.get("tool_calls", [])
+            content    = msg.get("content", "").strip()
 
             if not tool_calls:
-                print(f"\nGemma: {msg.get('content', '')}\n")
-                break
+                upper = content.upper()
+                if "DONE" in upper or "BLOCKED" in upper or nudges >= MAX_NUDGES:
+                    print(f"\nGemma: {content}\n")
+                    break
+                nudges += 1
+                print(f"  [nudge {nudges}/{MAX_NUDGES}]")
+                messages.append({"role": "user", "content": "You haven't finished. Use tools to continue."})
+                continue
+
+            nudges = 0
 
             for tc in tool_calls:
                 fn   = tc.get("function", {})
@@ -221,7 +260,8 @@ def interactive_loop():
                         args = {}
                 print(f"  [tool] {name}({_fmt_args(args)})")
                 result = call_tool(name, args)
-                print(f"  [result] {result[:300]}{'...' if len(result) > 300 else ''}")
+                safe_r = result[:300].encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8", errors="replace")
+                print(f"  [result] {safe_r}{'...' if len(result) > 300 else ''}")
                 messages.append({"role": "tool", "content": result})
 
 
