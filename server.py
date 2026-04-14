@@ -99,7 +99,7 @@ def _shell_ok(result: dict) -> dict:
         return _err(result["error"])
     if not result.get("success"):
         return _err(combined or f"exit code {result.get('returncode', '?')}")
-    return _ok(combined or f"(exit code {result.get('returncode', 0)})")
+    return _ok(combined or "OK")
 
 
 # ═══════════════════════════════════════════════════════════════
