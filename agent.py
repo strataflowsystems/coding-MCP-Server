@@ -350,6 +350,8 @@ if __name__ == "__main__":
     parser.add_argument("prompt", nargs="?", help="Task prompt")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive REPL mode")
     parser.add_argument("--model", default=MODEL, help=f"Ollama model (default: {MODEL})")
+    parser.add_argument("--output", "-o", help="Write final result as JSON to this file path")
+    parser.add_argument("--context", "-c", help="Extra context to prepend to the prompt (from previous agent)")
     args = parser.parse_args()
 
     MODEL = args.model  # type: ignore
@@ -357,7 +359,20 @@ if __name__ == "__main__":
     if args.interactive:
         interactive_loop()
     elif args.prompt:
-        run(args.prompt)
+        prompt = args.prompt
+        if args.context:
+            prompt = f"Context from previous step:\n{args.context}\n\n---\n\nTask: {prompt}"
+        result = run(prompt)
+        if args.output:
+            import datetime
+            out = {
+                "model": MODEL,
+                "prompt": args.prompt,
+                "result": result,
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+            }
+            Path(args.output).write_text(json.dumps(out, indent=2), encoding="utf-8")
+            print(f"\n[agent] Result written to {args.output}")
     else:
         parser.print_help()
         sys.exit(1)
