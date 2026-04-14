@@ -161,12 +161,14 @@ def launch_app(app: str, path: str = "") -> dict:
     Examples: launch_app('explorer'), launch_app('explorer', 'C:/Users/lauri/Desktop'),
     launch_app('notepad', 'C:/file.txt'), launch_app('code', 'C:/myproject').
     Use this whenever the user asks to open an app, folder, or file."""
-    cmd = f'start "" "{app}"'
-    if path:
-        cmd = f'start "" "{app}" "{path}"'
-    result = _run(cmd, shell_type="cmd")
+    clean_path = path.replace("/", "\\").strip() if path else ""
+    if clean_path:
+        ps_cmd = f'Start-Process "{app}" -ArgumentList \'"{clean_path}"\''
+    else:
+        ps_cmd = f'Start-Process "{app}"'
+    result = _run(ps_cmd, shell_type="powershell")
     if result.get("success") or result.get("returncode", 1) == 0:
-        label = f"{app} {path}".strip()
+        label = f"{app} {clean_path}".strip()
         return _ok(f"Launched: {label}")
     return _shell_ok(result)
 
