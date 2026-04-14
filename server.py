@@ -164,7 +164,11 @@ def launch_app(app: str, path: str = "") -> dict:
     cmd = f'start "" "{app}"'
     if path:
         cmd = f'start "" "{app}" "{path}"'
-    return _shell_ok(_run(cmd, shell_type="cmd"))
+    result = _run(cmd, shell_type="cmd")
+    if result.get("success") or result.get("returncode", 1) == 0:
+        label = f"{app} {path}".strip()
+        return _ok(f"Launched: {label}")
+    return _shell_ok(result)
 
 
 @mcp.tool()

@@ -24,6 +24,8 @@ CORE RULES:
   Examples: run_cmd("explorer"), run_cmd("explorer C:\\Users\\lauri\\Desktop"),
   run_cmd("start notepad"), run_powershell("Start-Process explorer").
   Never say you cannot open GUI apps — use run_cmd to launch them.
+- When a tool returns "ok": true or "Launched: ..." or exit code 0 — the action SUCCEEDED.
+  Do not apologise. Do not retry. Say DONE.
 
 WORKFLOW:
 1. Orient: call tree() or get_project_context() on the target path first.
