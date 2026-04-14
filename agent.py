@@ -40,6 +40,26 @@ _THINK_RE    = re.compile(r"<think>.*?</think>", re.DOTALL)
 _XMLTOOL_RE  = re.compile(r"<function=(\w+)>(.*?)</function>", re.DOTALL)
 _PARAM_RE    = re.compile(r"<parameter=(\w+)>\s*(.*?)\s*</parameter>", re.DOTALL)
 
+# Phrases that indicate the model is narrating instead of acting — nudge-worthy
+_NARRATION_PHRASES = re.compile(
+    r"\b(I would|I will|I can|I could|I should|I need to|Let me|I'll|I'm going to|"
+    r"To do this|First,? I|Next,? I|I plan to|I'll start|I'll begin)\b",
+    re.IGNORECASE,
+)
+
+def _should_nudge(content: str) -> bool:
+    """Return True only if the response looks like narration, not a real completion."""
+    # Short replies (greetings, confirmations, questions) — never nudge
+    if len(content.strip()) < 120:
+        return False
+    # Contains explicit narration phrases — nudge
+    if _NARRATION_PHRASES.search(content):
+        return True
+    # Long response with no DONE/BLOCKED — probably describing instead of acting
+    if len(content) > 300:
+        return True
+    return False
+
 def _strip_thinking(text: str) -> str:
     """Remove Qwen3 <think>...</think> blocks from output."""
     return _THINK_RE.sub("", text).strip()
@@ -217,19 +237,19 @@ def run(user_prompt: str, verbose: bool = True) -> str:
                 print(f"\n[agent] {content}")
                 return content
 
-            # Gemma narrated instead of acting — nudge her back
-            nudges += 1
-            if nudges >= MAX_NUDGES:
-                print(f"\n[agent] Gemma stopped acting after {nudges} nudges. Last response:\n{content}")
-                return content
+            # Only nudge if response looks like narration, not a real completion
+            if _should_nudge(content):
+                nudges += 1
+                if nudges >= MAX_NUDGES:
+                    print(f"\n[agent] {content}")
+                    return content
+                print(f"  [nudge {nudges}/{MAX_NUDGES}] Response looks like narration, re-prompting...")
+                messages.append({"role": "user", "content": "Do not describe — use tools to continue."})
+                continue
 
-            nudge_msg = (
-                "You haven't finished the task and you haven't called any tools. "
-                "Do not explain — use the appropriate tools to continue right now."
-            )
-            print(f"  [nudge {nudges}/{MAX_NUDGES}] Gemma went text-only, re-prompting...")
-            messages.append({"role": "user", "content": nudge_msg})
-            continue
+            # Short/conversational reply — accept as-is
+            print(f"\n[agent] {content}")
+            return content
 
         nudges = 0  # reset nudge counter on any tool call
 
@@ -295,13 +315,17 @@ def interactive_loop():
 
             if not tool_calls:
                 upper = content.upper()
-                if "DONE" in upper or "BLOCKED" in upper or nudges >= MAX_NUDGES:
-                    print(f"\nGemma: {content}\n")
+                if "DONE" in upper or "BLOCKED" in upper:
+                    print(f"\nAgent: {content}\n")
                     break
-                nudges += 1
-                print(f"  [nudge {nudges}/{MAX_NUDGES}]")
-                messages.append({"role": "user", "content": "You haven't finished. Use tools to continue."})
-                continue
+                if _should_nudge(content) and nudges < MAX_NUDGES:
+                    nudges += 1
+                    print(f"  [nudge {nudges}/{MAX_NUDGES}]")
+                    messages.append({"role": "user", "content": "Do not describe — use tools to continue."})
+                    continue
+                # Conversational or complete — accept
+                print(f"\nAgent: {content}\n")
+                break
 
             nudges = 0
 
