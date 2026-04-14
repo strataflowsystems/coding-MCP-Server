@@ -156,6 +156,18 @@ def list_dir(path: str = "") -> dict:
 
 
 @mcp.tool()
+def launch_app(app: str, path: str = "") -> dict:
+    """Launch any Windows application or open a file/folder in Explorer.
+    Examples: launch_app('explorer'), launch_app('explorer', 'C:/Users/lauri/Desktop'),
+    launch_app('notepad', 'C:/file.txt'), launch_app('code', 'C:/myproject').
+    Use this whenever the user asks to open an app, folder, or file."""
+    cmd = f'start "" "{app}"'
+    if path:
+        cmd = f'start "" "{app}" "{path}"'
+    return _shell_ok(_run(cmd, shell_type="cmd"))
+
+
+@mcp.tool()
 def get_env(var: str = "") -> dict:
     """Get a Windows environment variable. Leave var empty to list all."""
     if var:
@@ -883,6 +895,7 @@ _TOOL_REGISTRY: dict[str, str] = {
     # Shell
     "run_powershell":        "Run a PowerShell command on the Windows host",
     "run_cmd":               "Run a Windows CMD command on the host",
+    "launch_app":            "Launch any Windows app or open a folder in Explorer",
     # Filesystem
     "read_file":             "Read an entire file",
     "read_file_range":       "Read a specific line range from a file",
