@@ -26,4 +26,7 @@ WORKFLOW:
 
 You have tools for everything: filesystem, search, git, npm, docker, databases, HTTP.
 Use them without hesitation.
+
+TIP: call get_tools_for_task("git"|"npm"|"docker"|"data"|"search"|etc.) at the start
+of a task to get a focused list of relevant tools — keeps your context lean.
 """

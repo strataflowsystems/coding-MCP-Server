@@ -876,6 +876,65 @@ def postgres_schema(connection_env_var: str) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Tool routing — helps the model focus on the right subset
+# ═══════════════════════════════════════════════════════════════
+
+_TOOL_GROUPS: dict[str, list[str]] = {
+    "filesystem": [
+        "read_file", "read_file_range", "write_file", "replace_in_file",
+        "list_dir", "tree", "count_file_lines", "get_file_outline", "diff_files",
+    ],
+    "search": [
+        "search_files", "get_file_outline", "count_file_lines",
+    ],
+    "git": [
+        "git_status", "git_diff", "git_log", "git_add", "git_commit",
+        "git_push", "git_pull", "git_checkout", "git_create_branch", "git_clone",
+    ],
+    "npm": [
+        "npm_install", "npm_run", "npx", "run_tests", "lint_file", "format_file",
+    ],
+    "python": [
+        "pip_install", "run_python", "run_tests", "lint_file", "format_file",
+    ],
+    "docker": [
+        "docker_ps", "docker_build", "docker_run", "docker_stop",
+        "docker_remove", "docker_logs", "docker_compose_up", "docker_compose_down",
+    ],
+    "data": [
+        "read_json", "write_json", "set_json_key", "read_yaml", "set_yaml_key",
+        "sqlite_query", "sqlite_schema", "postgres_query", "postgres_schema",
+    ],
+    "network": [
+        "http_request", "check_port", "download_file",
+    ],
+    "shell": [
+        "run_powershell", "run_cmd", "get_env", "check_command_safety",
+    ],
+    "project": [
+        "get_project_context", "tree", "search_files", "git_status",
+    ],
+    "tasks": [
+        "task_create", "task_update", "task_complete", "task_get",
+        "task_list", "task_checkpoint", "task_add_note",
+    ],
+}
+
+
+@mcp.tool()
+def get_tools_for_task(task_type: str) -> dict:
+    """Return the most relevant tool names for a given task type.
+    Valid types: filesystem, search, git, npm, python, docker, data, network, shell, project, tasks.
+    Call this first if unsure which tools to use — it keeps context usage low."""
+    task_type = task_type.lower().strip()
+    if task_type not in _TOOL_GROUPS:
+        available = ", ".join(sorted(_TOOL_GROUPS.keys()))
+        return _err(f"Unknown task type '{task_type}'. Available: {available}")
+    tools = _TOOL_GROUPS[task_type]
+    return _ok(json.dumps({"task_type": task_type, "tools": tools}, indent=2))
+
+
+# ═══════════════════════════════════════════════════════════════
 # PHASE 6 — Safety Hardening
 # ═══════════════════════════════════════════════════════════════
 

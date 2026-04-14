@@ -46,6 +46,9 @@ SYSTEM_PROMPT = textwrap.dedent("""\
 
     You have tools for everything: filesystem, search, git, npm, docker, databases, HTTP.
     Use them without hesitation.
+
+    TIP: call get_tools_for_task("git"|"npm"|"docker"|"data"|"search"|etc.) at the start
+    of a task to get a focused list of relevant tools — keeps your context lean.
 """)
 
 
@@ -205,7 +208,7 @@ def run(user_prompt: str, verbose: bool = True) -> str:
 def _fmt_args(args: dict) -> str:
     parts = []
     for k, v in args.items():
-        v_str = repr(v) if not isinstance(v, str) else f'"{v[:60]}{"…" if len(v) > 60 else ""}"'
+        v_str = repr(v) if not isinstance(v, str) else f'"{v[:60]}{"..." if len(v) > 60 else ""}"'
         parts.append(f"{k}={v_str}")
     return ", ".join(parts)
 
