@@ -1,15 +1,23 @@
 """
-Gemma 4 Agent Loop
-Connects Ollama (Gemma 4) to the MCP tool server and runs an autonomous
-coding agent loop until Gemma stops calling tools or hits MAX_TURNS.
+Autonomous Coding Agent Loop
+Connects Ollama to the MCP tool server and runs an autonomous coding agent
+loop until the model stops calling tools or hits MAX_TURNS.
+
+Supported models (use --model flag):
+    gemma4-coder      Gemma 4 26B tuned (default)
+    qwen3-coder-agent Qwen3-coder 30B tuned
+    gemma4:26b        Raw Gemma 4 (no tuning)
+    qwen3-coder:30b   Raw Qwen3-coder (no tuning)
 
 Usage:
     python agent.py "refactor the auth module in C:/ai-workspace/myapp"
-    python agent.py --interactive     # REPL mode
+    python agent.py --interactive
+    python agent.py --model qwen3-coder-agent "add error handling to server.py"
 """
 
 import argparse
 import json
+import re
 import sys
 import textwrap
 from typing import Any
@@ -22,8 +30,29 @@ OLLAMA_URL    = "http://localhost:11434"
 MCP_URL       = "http://localhost:3001/mcp"
 MODEL         = "gemma4-coder"       # use the tuned modelfile; fallback: gemma4:26b
 MAX_TURNS     = 40                   # hard ceiling on tool-call rounds
-MAX_NUDGES    = 3                    # max times we re-prompt Gemma if she narrates instead of acts
+MAX_NUDGES    = 3                    # max times we re-prompt if model narrates instead of acts
 TIMEOUT       = 120                  # seconds per Ollama call
+
+# Models that emit <think>...</think> blocks — strip before processing
+THINKING_MODELS = {"qwen3-coder-agent", "qwen3-coder:30b", "qwen3-coder:latest"}
+
+_THINK_RE    = re.compile(r"<think>.*?</think>", re.DOTALL)
+_XMLTOOL_RE  = re.compile(r"<function=(\w+)>(.*?)</function>", re.DOTALL)
+_PARAM_RE    = re.compile(r"<parameter=(\w+)>\s*(.*?)\s*</parameter>", re.DOTALL)
+
+def _strip_thinking(text: str) -> str:
+    """Remove Qwen3 <think>...</think> blocks from output."""
+    return _THINK_RE.sub("", text).strip()
+
+def _extract_xml_tool_calls(text: str) -> list[dict]:
+    """Parse Qwen3's fallback XML tool call format into Ollama-style tool_calls."""
+    calls = []
+    for fn_match in _XMLTOOL_RE.finditer(text):
+        name = fn_match.group(1)
+        body = fn_match.group(2)
+        args = {m.group(1): m.group(2) for m in _PARAM_RE.finditer(body)}
+        calls.append({"function": {"name": name, "arguments": args}})
+    return calls
 
 SYSTEM_PROMPT = textwrap.dedent("""\
     You are an autonomous coding agent. You act — you do not describe, explain, or ask for permission.
@@ -120,9 +149,21 @@ def call_tool(name: str, arguments: dict) -> str:
 
 def chat(messages: list[dict], tools: list[dict]) -> dict:
     """Send a chat request to Ollama and return the message object."""
+    # For Qwen3 thinking models, prepend /no_think to the last user message
+    # to suppress extended reasoning chains that lead to refusals
+    send_messages = messages
+    if MODEL in THINKING_MODELS:
+        send_messages = []
+        for i, m in enumerate(messages):
+            if m["role"] == "user" and i == len(messages) - 1:
+                content = m["content"]
+                if not content.startswith("/no_think"):
+                    m = {**m, "content": "/no_think " + content}
+            send_messages.append(m)
+
     payload = {
         "model": MODEL,
-        "messages": messages,
+        "messages": send_messages,
         "tools": tools,
         "stream": False,
         "options": {
@@ -132,7 +173,18 @@ def chat(messages: list[dict], tools: list[dict]) -> dict:
     }
     r = httpx.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=TIMEOUT)
     r.raise_for_status()
-    return r.json().get("message", {})
+    msg = r.json().get("message", {})
+    # Strip thinking tokens from content if present
+    if msg.get("content"):
+        clean = _strip_thinking(msg["content"])
+        # If no structured tool_calls but content has XML tool call syntax, parse it
+        if not msg.get("tool_calls") and _XMLTOOL_RE.search(clean):
+            xml_calls = _extract_xml_tool_calls(clean)
+            if xml_calls:
+                msg = {**msg, "tool_calls": xml_calls, "content": _XMLTOOL_RE.sub("", clean).strip()}
+        else:
+            msg = {**msg, "content": clean}
+    return msg
 
 
 # ─── Agent loop ───────────────────────────────────────────────────────────────
