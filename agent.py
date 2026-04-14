@@ -78,6 +78,7 @@ SYSTEM_PROMPT = textwrap.dedent("""\
 
     TIP: call get_tools_for_task("git"|"npm"|"docker"|"data"|"search"|etc.) at the start
     of a task to get a focused list of relevant tools — keeps your context lean.
+    If asked what tools you have, call list_tools() — never answer from memory.
 """)
 
 

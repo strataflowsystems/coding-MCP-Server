@@ -876,6 +876,106 @@ def postgres_schema(connection_env_var: str) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Self-awareness — lets the model query its actual capabilities
+# ═══════════════════════════════════════════════════════════════
+
+_TOOL_REGISTRY: dict[str, str] = {
+    # Shell
+    "run_powershell":        "Run a PowerShell command on the Windows host",
+    "run_cmd":               "Run a Windows CMD command on the host",
+    # Filesystem
+    "read_file":             "Read an entire file",
+    "read_file_range":       "Read a specific line range from a file",
+    "write_file":            "Write/overwrite a file (use replace_in_file for edits)",
+    "replace_in_file":       "Replace an exact string in a file — safer than write_file",
+    "list_dir":              "List directory contents",
+    "tree":                  "Show indented directory tree (skips node_modules/.git)",
+    "count_file_lines":      "Count lines in a file before using read_file_range",
+    "get_file_outline":      "Extract all function/class definitions with line numbers",
+    "diff_files":            "Unified diff between two files",
+    # Search
+    "search_files":          "Search file contents with regex (uses ripgrep)",
+    # Project
+    "get_project_context":   "Detect framework, scripts, dependencies from project manifest",
+    "get_env":               "Read environment variables",
+    # Git
+    "git_status":            "git status",
+    "git_diff":              "git diff (staged or unstaged)",
+    "git_log":               "git log --oneline",
+    "git_add":               "git add <files>",
+    "git_commit":            "git commit -m",
+    "git_push":              "git push",
+    "git_pull":              "git pull",
+    "git_checkout":          "git checkout / switch branch",
+    "git_create_branch":     "git checkout -b",
+    "git_clone":             "git clone",
+    # npm / Node
+    "npm_install":           "npm install",
+    "npm_run":               "npm run <script>",
+    "npx":                   "npx <command>",
+    # Python
+    "pip_install":           "pip install packages",
+    "run_python":            "Run a Python script",
+    # Quality
+    "run_tests":             "Run tests (npm test / pytest — auto-detected)",
+    "lint_file":             "Lint a file (eslint / flake8 — auto-detected)",
+    "format_file":           "Format a file (prettier / black — auto-detected)",
+    # Docker
+    "docker_ps":             "List running containers",
+    "docker_build":          "docker build",
+    "docker_run":            "docker run",
+    "docker_stop":           "docker stop",
+    "docker_remove":         "docker rm",
+    "docker_logs":           "docker logs",
+    "docker_compose_up":     "docker-compose up",
+    "docker_compose_down":   "docker-compose down",
+    # Network
+    "http_request":          "HTTP GET/POST/etc to any URL",
+    "check_port":            "TCP connect test — verify a service is up",
+    "download_file":         "Download a file from a URL",
+    # Structured data
+    "read_json":             "Parse a JSON file, optionally filter by key path",
+    "write_json":            "Write formatted JSON to a file",
+    "set_json_key":          "Set a key in a JSON file by dot-path",
+    "read_yaml":             "Parse a YAML file and return as JSON",
+    "set_yaml_key":          "Set a key in a YAML file by dot-path",
+    # Databases
+    "sqlite_query":          "Run a read-only SQL query on a SQLite database",
+    "sqlite_schema":         "Show all table definitions in a SQLite database",
+    "postgres_query":        "Run a read-only SQL query on Postgres",
+    "postgres_schema":       "Show table/column definitions from Postgres",
+    # Safety
+    "check_command_safety":  "Validate a shell command before running it",
+    "sandbox_info":          "Show sandbox root and allowed executables",
+    # Task state
+    "task_create":           "Create a tracked task with optional step list",
+    "task_update":           "Update a step status within a task",
+    "task_complete":         "Mark a task as done/failed/cancelled",
+    "task_get":              "Get full state of a task by ID",
+    "task_list":             "List all tasks with status and progress",
+    "task_checkpoint":       "Save a recovery blob to a task",
+    "task_add_note":         "Append a free-text note to a task log",
+    # Routing
+    "get_tools_for_task":    "Get a focused list of tools for a task type (git/npm/docker/etc)",
+    "list_tools":            "List all available tools with descriptions (you are reading this now)",
+}
+
+
+@mcp.tool()
+def list_tools(group: str = "") -> dict:
+    """List all tools available on this MCP server with short descriptions.
+    Optionally pass a group name to filter (same groups as get_tools_for_task).
+    Call this when asked what tools you have — never guess from training data."""
+    if group and group in _TOOL_GROUPS:
+        names = _TOOL_GROUPS[group]
+        result = {name: _TOOL_REGISTRY.get(name, "") for name in names}
+    else:
+        result = _TOOL_REGISTRY
+    lines = [f"  {name:<28} {desc}" for name, desc in result.items()]
+    return _ok(f"{len(result)} tools:\n" + "\n".join(lines))
+
+
+# ═══════════════════════════════════════════════════════════════
 # Tool routing — helps the model focus on the right subset
 # ═══════════════════════════════════════════════════════════════
 
