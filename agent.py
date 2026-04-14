@@ -43,9 +43,22 @@ SYSTEM_PROMPT = textwrap.dedent("""\
 
 # ─── MCP client ──────────────────────────────────────────────────────────────
 
+MCP_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
 def _mcp_post(payload: dict) -> dict:
-    r = httpx.post(MCP_URL, json=payload, timeout=60)
+    r = httpx.post(MCP_URL, json=payload, headers=MCP_HEADERS, timeout=60)
     r.raise_for_status()
+    # Stateless HTTP may return SSE or plain JSON
+    content_type = r.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        # Parse SSE: find the first data: line
+        for line in r.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+        return {}
     return r.json()
 
 
@@ -147,10 +160,10 @@ def run(user_prompt: str, verbose: bool = True) -> str:
                 except Exception:
                     args = {}
 
-            print(f"  → {name}({_fmt_args(args)})")
+            print(f"  >> {name}({_fmt_args(args)})")
             result = call_tool(name, args)
-            truncated = result[:500] + "…" if len(result) > 500 else result
-            print(f"    ← {truncated}")
+            truncated = result[:500] + "..." if len(result) > 500 else result
+            print(f"     {truncated}")
 
             messages.append({
                 "role": "tool",
@@ -208,7 +221,7 @@ def interactive_loop():
                         args = {}
                 print(f"  [tool] {name}({_fmt_args(args)})")
                 result = call_tool(name, args)
-                print(f"  [result] {result[:300]}{'…' if len(result) > 300 else ''}")
+                print(f"  [result] {result[:300]}{'...' if len(result) > 300 else ''}")
                 messages.append({"role": "tool", "content": result})
 
 
