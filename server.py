@@ -1450,26 +1450,51 @@ def infisical_list_secrets(
     project_id: str,
     environment: str = "dev",
     path: str = "/",
+    recursive: bool = True,
 ) -> dict:
     """List all secret NAMES (no values) in an Infisical project/environment.
     environment: dev | staging | prod (or custom slug).
+    recursive=True (default) also lists secrets in subfolders — secrets are often NOT in root /.
     Call this before infisical_get_secret to find the exact secret name.
     project_id: Codex=f1fa39d6-5411-4671-8f2a-81bfcbb96522 | OERATIONS_VM=263aa831-1c4c-46ef-b042-e3b27278173e | Synapse=c72e3334-f76c-4e1b-8253-42f75a298aad"""
-    result = _infisical(
-        "secrets",
-        "--projectId", project_id,
-        "--env", environment,
-        "--path", path,
-        "-o", "json",
-    )
-    if not result.get("ok"):
-        return result
-    try:
-        secrets = json.loads(result["data"])
-        names = [s.get("secretKey", "") for s in secrets]
-        return _ok("\n".join(names) if names else "(no secrets found)")
-    except Exception:
-        return result  # return raw if JSON parse fails
+    token = os.environ.get("INFISICAL_TOKEN", "")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    def _get_secrets(p: str) -> list[str]:
+        try:
+            import urllib.request, urllib.parse
+            params = urllib.parse.urlencode({"workspaceId": project_id, "environment": environment, "secretPath": p})
+            req = urllib.request.Request(f"{INFISICAL_DOMAIN}/api/v3/secrets/raw?{params}", headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+            return [f"{p.rstrip('/')}/{s['secretKey']}" if p != "/" else s["secretKey"] for s in data.get("secrets", [])]
+        except Exception:
+            return []
+
+    def _get_folders(p: str) -> list[str]:
+        try:
+            import urllib.request, urllib.parse
+            params = urllib.parse.urlencode({"workspaceId": project_id, "environment": environment, "path": p})
+            req = urllib.request.Request(f"{INFISICAL_DOMAIN}/api/v1/folders?{params}", headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+            return [f"{p.rstrip('/')}/{f['name']}" for f in data.get("folders", [])]
+        except Exception:
+            return []
+
+    all_secrets = _get_secrets(path)
+    if recursive:
+        folders = _get_folders(path)
+        for folder in folders:
+            all_secrets.extend(_get_secrets(folder))
+            # one level deeper
+            subfolders = _get_folders(folder)
+            for sub in subfolders:
+                all_secrets.extend(_get_secrets(sub))
+
+    if not all_secrets:
+        return _ok(f"(no secrets found in {environment}{path})")
+    return _ok("\n".join(all_secrets))
 
 
 @mcp.tool()
@@ -1508,27 +1533,19 @@ def infisical_search_secrets(
     path: str = "/",
 ) -> dict:
     """Search for secrets whose names match a pattern (case-insensitive substring).
+    Searches root and all subfolders automatically.
     Returns matching secret NAMES only — call infisical_get_secret for the value.
     Examples: search 'ssh' to find SSH keys, 'db' for database passwords,
-    'vm-prod' for a specific server's credentials."""
-    result = _infisical(
-        "secrets",
-        "--projectId", project_id,
-        "--env", environment,
-        "--path", path,
-        "-o", "json",
-    )
-    if not result.get("ok"):
-        return result
-    try:
-        secrets = json.loads(result["data"])
-        pattern_lower = pattern.lower()
-        matches = [s["secretKey"] for s in secrets if pattern_lower in s.get("secretKey", "").lower()]
-        if not matches:
-            return _ok(f"No secrets matching '{pattern}' in {environment}{path}")
-        return _ok("\n".join(matches))
-    except Exception:
-        return result
+    'vm' for VM credentials."""
+    all_result = infisical_list_secrets(project_id=project_id, environment=environment, path=path, recursive=True)
+    if not all_result.get("ok"):
+        return all_result
+    lines = all_result["data"].splitlines()
+    pattern_lower = pattern.lower()
+    matches = [l for l in lines if pattern_lower in l.lower()]
+    if not matches:
+        return _ok(f"No secrets matching '{pattern}' in {environment}")
+    return _ok("\n".join(matches))
 
 
 @mcp.tool()
