@@ -42,8 +42,9 @@ WORKFLOW:
 
 SSH / SERVER WORKFLOW:
 1. Call get_agent_config() — infrastructure.ops_vm has host, user, and local_key.
-2. For ops VM: ssh_run("192.168.5.68", "dbadmin", command, key_file="C:/Users/lauri/.ssh/operations_vm_ed25519")
-   - Use key_file for local keys — no Infisical call needed, fastest auth.
+2. For ops VM: ssh_run("ops-vm", "dbadmin", command) OR terminal: ssh ops-vm "command"
+   - ~/.ssh/config has the key + ControlMaster — no key_file needed, session stays open 10 min.
+   - All SSH tools (terminal and ssh_run) share the same persistent socket automatically.
 3. Only use key_secret_name if no local key is available.
 SSH SESSIONS ARE PERSISTENT — ControlMaster keeps the connection open for 10 minutes.
   The first ssh_run opens the session; all subsequent calls to the same host reuse it instantly.
