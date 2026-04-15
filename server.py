@@ -997,6 +997,9 @@ _TOOL_REGISTRY: dict[str, str] = {
     "infisical_get_secret":    "Get a specific secret value by name from Infisical",
     "infisical_search_secrets":"Search secrets by name pattern — returns names only, not values",
     "infisical_export_env":    "Export all secrets as .env / JSON / YAML for a project/environment",
+    # SSH
+    "ssh_run":                 "Run a command on a remote server via SSH — auto-fetches key from Infisical",
+    "ssh_copy":                "Upload or download files via SCP — auto-fetches key from Infisical",
 }
 
 
@@ -1062,8 +1065,14 @@ _TOOL_GROUPS: dict[str, list[str]] = {
         "infisical_get_secret", "infisical_search_secrets", "infisical_export_env",
     ],
     "servers": [
-        "infisical_status", "infisical_search_secrets", "infisical_get_secret",
-        "infisical_export_env", "run_powershell", "run_cmd", "check_port", "http_request",
+        "infisical_status", "infisical_list_secrets", "infisical_search_secrets",
+        "infisical_get_secret", "infisical_export_env",
+        "ssh_run", "ssh_copy",
+        "run_powershell", "run_cmd", "check_port", "http_request",
+    ],
+    "ssh": [
+        "ssh_run", "ssh_copy",
+        "infisical_get_secret", "infisical_search_secrets",
     ],
 }
 
@@ -1484,13 +1493,16 @@ def infisical_list_secrets(
 
     all_secrets = _get_secrets(path)
     if recursive:
-        folders = _get_folders(path)
-        for folder in folders:
+        # Full depth-first traversal — no depth limit
+        queue = _get_folders(path)
+        visited = set()
+        while queue:
+            folder = queue.pop(0)
+            if folder in visited:
+                continue
+            visited.add(folder)
             all_secrets.extend(_get_secrets(folder))
-            # one level deeper
-            subfolders = _get_folders(folder)
-            for sub in subfolders:
-                all_secrets.extend(_get_secrets(sub))
+            queue.extend(_get_folders(folder))
 
     if not all_secrets:
         return _ok(f"(no secrets found in {environment}{path})")
@@ -1506,6 +1518,7 @@ def infisical_get_secret(
 ) -> dict:
     """Retrieve a specific secret value from Infisical by name.
     Use infisical_list_secrets or infisical_search_secrets first to find the exact name.
+    SSH keys and multi-line values are returned with correct LF line endings (CRLF stripped).
     Returns the secret value — handle with care, do not log unnecessarily."""
     result = _infisical(
         "secrets", "get", secret_name,
@@ -1519,8 +1532,12 @@ def infisical_get_secret(
     try:
         data = json.loads(result["data"])
         if isinstance(data, list) and data:
-            return _ok(data[0].get("secretValue", ""))
-        return _ok(str(data))
+            val = data[0].get("secretValue", "")
+        else:
+            val = str(data)
+        # Strip Windows CRLF — critical for SSH keys stored on Windows
+        val = val.replace("\r\n", "\n").replace("\r", "\n")
+        return _ok(val)
     except Exception:
         return result
 
@@ -1565,6 +1582,154 @@ def infisical_export_env(
         "--path", path,
         "-f", format,
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# SSH TOOLS
+# ═══════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def ssh_run(
+    host: str,
+    user: str,
+    command: str,
+    key_secret_name: str = "",
+    key_secret_project_id: str = "",
+    key_secret_environment: str = "prod",
+    key_secret_path: str = "/Virtual_Machine/SSH",
+    password: str = "",
+    port: int = 22,
+    timeout: int = 30,
+) -> dict:
+    """Run a command on a remote server via SSH.
+
+    Auth options (use one):
+    1. SSH key from Infisical: set key_secret_name + key_secret_project_id
+       - For ops VM: key_secret_name='OPS_VM_SSH_PRIVATE_KEY', key_secret_project_id='263aa831-1c4c-46ef-b042-e3b27278173e'
+    2. Password: set password=<value>
+    3. Agent/system key: leave key_secret_name and password empty
+
+    The tool handles CRLF stripping and temp file cleanup automatically.
+
+    Example — check ops VM workflow stack:
+      ssh_run('192.168.5.68', 'dbadmin', 'docker ps', key_secret_name='OPS_VM_SSH_PRIVATE_KEY', key_secret_project_id='263aa831-1c4c-46ef-b042-e3b27278173e')
+    """
+    import tempfile, stat
+
+    key_file = None
+    try:
+        ssh_cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-o", "BatchMode=yes",
+            "-p", str(port),
+        ]
+
+        # Fetch SSH key from Infisical if specified
+        if key_secret_name and key_secret_project_id:
+            key_result = infisical_get_secret(
+                secret_name=key_secret_name,
+                project_id=key_secret_project_id,
+                environment=key_secret_environment,
+                path=key_secret_path,
+            )
+            if not key_result.get("ok"):
+                return _err(f"Failed to fetch SSH key from Infisical: {key_result.get('error')}")
+            key_val = key_result["data"].strip() + "\n"
+
+            # Write to temp file with correct permissions
+            fd, key_file = tempfile.mkstemp(prefix="ssh_key_", suffix=".pem")
+            os.write(fd, key_val.encode("utf-8"))
+            os.close(fd)
+            os.chmod(key_file, stat.S_IRUSR | stat.S_IWUSR)
+            ssh_cmd += ["-i", key_file]
+            ssh_cmd += ["-o", "PasswordAuthentication=no"]
+
+        elif password:
+            # Use sshpass if available
+            ssh_cmd = ["sshpass", "-p", password] + ssh_cmd
+            ssh_cmd += ["-o", "PasswordAuthentication=yes"]
+
+        ssh_cmd += [f"{user}@{host}", command]
+
+        result = subprocess.run(
+            ssh_cmd, capture_output=True, text=True, timeout=timeout
+        )
+        combined = result.stdout
+        if result.stderr:
+            combined += "\n[stderr] " + result.stderr
+        if result.returncode != 0:
+            return _err(f"SSH exit {result.returncode}: {combined.strip()}")
+        return _ok(combined.strip() or "OK")
+
+    except subprocess.TimeoutExpired:
+        return _err(f"SSH timed out after {timeout}s")
+    except Exception as e:
+        return _err(str(e))
+    finally:
+        if key_file and os.path.exists(key_file):
+            os.unlink(key_file)
+
+
+@mcp.tool()
+def ssh_copy(
+    host: str,
+    user: str,
+    local_path: str,
+    remote_path: str,
+    key_secret_name: str = "",
+    key_secret_project_id: str = "",
+    key_secret_environment: str = "prod",
+    key_secret_path: str = "/Virtual_Machine/SSH",
+    port: int = 22,
+    direction: str = "upload",
+) -> dict:
+    """Copy files to/from a remote server via SCP.
+    direction: 'upload' (local -> remote) or 'download' (remote -> local).
+    Auth: same key_secret_* parameters as ssh_run."""
+    import tempfile, stat
+
+    key_file = None
+    try:
+        scp_cmd = [
+            "scp",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-P", str(port),
+        ]
+
+        if key_secret_name and key_secret_project_id:
+            key_result = infisical_get_secret(
+                secret_name=key_secret_name,
+                project_id=key_secret_project_id,
+                environment=key_secret_environment,
+                path=key_secret_path,
+            )
+            if not key_result.get("ok"):
+                return _err(f"Failed to fetch SSH key: {key_result.get('error')}")
+            key_val = key_result["data"].strip() + "\n"
+            fd, key_file = tempfile.mkstemp(prefix="scp_key_")
+            os.write(fd, key_val.encode("utf-8"))
+            os.close(fd)
+            os.chmod(key_file, stat.S_IRUSR | stat.S_IWUSR)
+            scp_cmd += ["-i", key_file]
+
+        if direction == "upload":
+            scp_cmd += [local_path, f"{user}@{host}:{remote_path}"]
+        else:
+            scp_cmd += [f"{user}@{host}:{remote_path}", local_path]
+
+        result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            return _err(result.stderr.strip() or f"scp exit {result.returncode}")
+        return _ok(f"{'Uploaded' if direction == 'upload' else 'Downloaded'}: {local_path} <-> {user}@{host}:{remote_path}")
+
+    except Exception as e:
+        return _err(str(e))
+    finally:
+        if key_file and os.path.exists(key_file):
+            os.unlink(key_file)
 
 
 # ═══════════════════════════════════════════════════════════════
