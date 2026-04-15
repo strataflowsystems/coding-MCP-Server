@@ -986,6 +986,11 @@ _TOOL_REGISTRY: dict[str, str] = {
     # Routing
     "get_tools_for_task":    "Get a focused list of tools for a task type (git/npm/docker/etc)",
     "list_tools":            "List all available tools with descriptions (you are reading this now)",
+    # Knowledge base
+    "get_agent_config":        "Load persistent infrastructure config — servers, project IDs, environments",
+    "memory_save":             "Save a discovered fact to persistent memory for future sessions",
+    "memory_get":              "Retrieve previously saved facts from persistent memory",
+    "update_agent_config":     "Update a section of the agent config file with new info",
     # Infisical
     "infisical_status":        "Check Infisical CLI login status — run first to confirm auth",
     "infisical_list_secrets":  "List secret names in a project/environment (no values by default)",
@@ -1306,6 +1311,88 @@ def task_add_note(task_id: str, note: str) -> dict:
     task["updated_at"] = datetime.datetime.utcnow().isoformat()
     _save_task(task)
     return _ok(f"Note added to task '{task_id}'")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Agent knowledge base — persistent config and memory
+# ═══════════════════════════════════════════════════════════════
+
+AGENT_CONFIG_PATH = r"C:\ai-workspace\agent-config.json"
+AGENT_MEMORY_PATH = r"C:\ai-workspace\agent-memory.json"
+
+
+@mcp.tool()
+def get_agent_config() -> dict:
+    """Load the persistent agent knowledge base — infrastructure, servers, Infisical
+    project IDs, environments, and notes. Call this at the start of any task involving
+    servers, VMs, deployments, or secrets so you don't have to rediscover everything."""
+    try:
+        data = json.loads(Path(AGENT_CONFIG_PATH).read_text(encoding="utf-8"))
+        return _ok(json.dumps(data, indent=2))
+    except FileNotFoundError:
+        return _err(f"Config not found at {AGENT_CONFIG_PATH} — create it or run sandbox_info()")
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def memory_save(key: str, value: str) -> dict:
+    """Save a fact or piece of information to persistent agent memory.
+    Use this to store anything useful you discover — server details, credentials
+    locations, project mappings, notes — so it's available in future sessions.
+    Examples: memory_save('prod-db-host', '10.0.1.5')
+              memory_save('infisical-project-alncom', 'proj-abc123')"""
+    try:
+        p = Path(AGENT_MEMORY_PATH)
+        memory = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        memory[key] = {
+            "value": value,
+            "saved_at": __import__("datetime").datetime.utcnow().isoformat(),
+        }
+        p.write_text(json.dumps(memory, indent=2), encoding="utf-8")
+        return _ok(f"Saved: {key} = {value[:80]}{'...' if len(value) > 80 else ''}")
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def memory_get(key: str = "") -> dict:
+    """Retrieve saved facts from persistent agent memory.
+    Leave key empty to list all saved memories.
+    Use this at the start of tasks to check what was previously learned."""
+    try:
+        p = Path(AGENT_MEMORY_PATH)
+        if not p.exists():
+            return _ok("(no memories saved yet)")
+        memory = json.loads(p.read_text(encoding="utf-8"))
+        if key:
+            entry = memory.get(key)
+            if not entry:
+                return _ok(f"No memory found for key '{key}'")
+            return _ok(entry["value"])
+        # List all
+        lines = [f"{k}: {v['value'][:80]}" for k, v in memory.items()]
+        return _ok("\n".join(lines) if lines else "(empty)")
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def update_agent_config(section: str, data: dict) -> dict:
+    """Update a section of the agent config file with new information.
+    section: 'servers' | 'vms' | 'infisical' | 'notes'
+    Use this when you discover new infrastructure details to persist them."""
+    try:
+        p = Path(AGENT_CONFIG_PATH)
+        config = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        if section == "notes" and isinstance(data.get("note"), str):
+            config.setdefault("notes", []).append(data["note"])
+        else:
+            config[section] = data
+        p.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return _ok(f"Config section '{section}' updated.")
+    except Exception as e:
+        return _err(str(e))
 
 
 # ═══════════════════════════════════════════════════════════════
