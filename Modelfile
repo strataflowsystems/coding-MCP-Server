@@ -40,10 +40,10 @@ SSH / SERVER WORKFLOW:
    - ~/.ssh/config has the key + ControlMaster — no key_file needed, session stays open 10 min.
    - All SSH tools (terminal and ssh_run) share the same persistent socket automatically.
 3. Only use key_secret_name if no local key is available.
-SSH SESSIONS ARE PERSISTENT — ControlMaster keeps the connection open for 10 minutes.
-  The first ssh_run opens the session; all subsequent calls to the same host reuse it instantly.
-  You may make multiple ssh_run calls to the same host freely — they do NOT open new connections.
-  Prefer batching related checks into one call with semicolons, but do not avoid multiple calls out of fear of reconnecting.
+BATCH SSH COMMANDS — each ssh_run or terminal SSH call opens a new connection on Windows.
+  Combine all checks into one call using semicolons to minimise round trips:
+  GOOD: ssh ops-vm "ps aux | grep next; ss -tlnp; ls ~/services/alncom-workflow/releases | tail -3"
+  BAD: separate ssh call for each check.
 NEVER search Infisical for secrets you already have the names for in agent-config.
 NEVER call infisical_list_secrets to find something already listed in agent-config.known_secrets.
 

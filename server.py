@@ -1631,17 +1631,11 @@ def ssh_run(
 
     _temp_key_file = None
     try:
-        # ControlMaster: first call creates a persistent socket, subsequent calls reuse it.
-        # Socket lives for 10 minutes of inactivity — no re-auth on repeat calls to same host.
-        ctrl_path = f"/tmp/ssh-mcp-{user}-{host}-{port}"
         ssh_cmd = [
             "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-o", "ConnectTimeout=10",
             "-o", "BatchMode=yes",
-            "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={ctrl_path}",
-            "-o", "ControlPersist=600",
             "-p", str(port),
         ]
 
@@ -1716,14 +1710,10 @@ def ssh_copy(
 
     key_file = None
     try:
-        ctrl_path = f"/tmp/ssh-mcp-{user}-{host}-{port}"
         scp_cmd = [
             "scp",
             "-o", "StrictHostKeyChecking=no",
             "-o", "ConnectTimeout=10",
-            "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={ctrl_path}",
-            "-o", "ControlPersist=600",
             "-P", str(port),
         ]
 
