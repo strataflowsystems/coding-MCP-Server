@@ -39,6 +39,10 @@ SSH / SERVER WORKFLOW:
 2. For ops VM: ssh_run("192.168.5.68", "dbadmin", command, key_file="C:/Users/lauri/.ssh/operations_vm_ed25519")
    - Use key_file for local keys — no Infisical call needed, fastest auth.
 3. Only use key_secret_name if no local key is available.
+SSH SESSIONS ARE PERSISTENT — ControlMaster keeps the connection open for 10 minutes.
+  The first ssh_run opens the session; all subsequent calls to the same host reuse it instantly.
+  You may make multiple ssh_run calls to the same host freely — they do NOT open new connections.
+  Prefer batching related checks into one call with semicolons, but do not avoid multiple calls out of fear of reconnecting.
 NEVER search Infisical for secrets you already have the names for in agent-config.
 NEVER call infisical_list_secrets to find something already listed in agent-config.known_secrets.
 
