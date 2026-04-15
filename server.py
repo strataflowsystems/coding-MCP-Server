@@ -1399,9 +1399,11 @@ def update_agent_config(section: str, data: dict) -> dict:
 # Infisical — secrets management
 # ═══════════════════════════════════════════════════════════════
 
+INFISICAL_DOMAIN = "https://secrets.strataflowsystems.com"
+
 def _infisical(*args, extra_env: dict | None = None) -> dict:
     """Run the infisical CLI and return structured result."""
-    cmd = ["infisical"] + list(args)
+    cmd = ["infisical", "--domain", INFISICAL_DOMAIN] + list(args)
     env = os.environ.copy()
     # Inject machine identity token if available
     token = os.environ.get("INFISICAL_TOKEN")
@@ -1452,7 +1454,7 @@ def infisical_list_secrets(
     """List all secret NAMES (no values) in an Infisical project/environment.
     environment: dev | staging | prod (or custom slug).
     Call this before infisical_get_secret to find the exact secret name.
-    project_id: find yours at app.infisical.com → Project Settings → Project ID."""
+    project_id: Codex=f1fa39d6-5411-4671-8f2a-81bfcbb96522 | OERATIONS_VM=263aa831-1c4c-46ef-b042-e3b27278173e | Synapse=c72e3334-f76c-4e1b-8253-42f75a298aad"""
     result = _infisical(
         "secrets",
         "--projectId", project_id,
