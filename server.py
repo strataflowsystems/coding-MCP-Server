@@ -977,6 +977,12 @@ _TOOL_REGISTRY: dict[str, str] = {
     # Routing
     "get_tools_for_task":    "Get a focused list of tools for a task type (git/npm/docker/etc)",
     "list_tools":            "List all available tools with descriptions (you are reading this now)",
+    # Infisical
+    "infisical_status":        "Check Infisical CLI login status — run first to confirm auth",
+    "infisical_list_secrets":  "List secret names in a project/environment (no values by default)",
+    "infisical_get_secret":    "Get a specific secret value by name from Infisical",
+    "infisical_search_secrets":"Search secrets by name pattern — returns names only, not values",
+    "infisical_export_env":    "Export all secrets as .env / JSON / YAML for a project/environment",
 }
 
 
@@ -1036,6 +1042,14 @@ _TOOL_GROUPS: dict[str, list[str]] = {
     "tasks": [
         "task_create", "task_update", "task_complete", "task_get",
         "task_list", "task_checkpoint", "task_add_note",
+    ],
+    "secrets": [
+        "infisical_status", "infisical_list_secrets",
+        "infisical_get_secret", "infisical_search_secrets", "infisical_export_env",
+    ],
+    "servers": [
+        "infisical_status", "infisical_search_secrets", "infisical_get_secret",
+        "infisical_export_env", "run_powershell", "run_cmd", "check_port", "http_request",
     ],
 }
 
@@ -1283,6 +1297,144 @@ def task_add_note(task_id: str, note: str) -> dict:
     task["updated_at"] = datetime.datetime.utcnow().isoformat()
     _save_task(task)
     return _ok(f"Note added to task '{task_id}'")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Infisical — secrets management
+# ═══════════════════════════════════════════════════════════════
+
+def _infisical(*args, extra_env: dict | None = None) -> dict:
+    """Run the infisical CLI and return structured result."""
+    cmd = ["infisical"] + list(args)
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30, env=env
+        )
+        combined = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+        if result.returncode != 0:
+            return _err(combined.strip() or f"infisical exit {result.returncode}")
+        return _ok(combined.strip())
+    except FileNotFoundError:
+        return _err("infisical CLI not found — install from https://infisical.com/docs/cli/overview")
+    except subprocess.TimeoutExpired:
+        return _err("infisical CLI timed out after 30s")
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def infisical_status() -> dict:
+    """Check Infisical CLI login status and version. Run this first to confirm auth."""
+    ver = _infisical("--version")
+    return _ok(ver.get("data", "") or ver.get("error", ""))
+
+
+@mcp.tool()
+def infisical_list_secrets(
+    project_id: str,
+    environment: str = "dev",
+    path: str = "/",
+) -> dict:
+    """List all secret NAMES (no values) in an Infisical project/environment.
+    environment: dev | staging | prod (or custom slug).
+    Call this before infisical_get_secret to find the exact secret name.
+    project_id: find yours at app.infisical.com → Project Settings → Project ID."""
+    result = _infisical(
+        "secrets",
+        "--projectId", project_id,
+        "--env", environment,
+        "--path", path,
+        "-o", "json",
+    )
+    if not result.get("ok"):
+        return result
+    try:
+        secrets = json.loads(result["data"])
+        names = [s.get("secretKey", "") for s in secrets]
+        return _ok("\n".join(names) if names else "(no secrets found)")
+    except Exception:
+        return result  # return raw if JSON parse fails
+
+
+@mcp.tool()
+def infisical_get_secret(
+    secret_name: str,
+    project_id: str,
+    environment: str = "dev",
+    path: str = "/",
+) -> dict:
+    """Retrieve a specific secret value from Infisical by name.
+    Use infisical_list_secrets or infisical_search_secrets first to find the exact name.
+    Returns the secret value — handle with care, do not log unnecessarily."""
+    result = _infisical(
+        "secrets", "get", secret_name,
+        "--projectId", project_id,
+        "--env", environment,
+        "--path", path,
+        "-o", "json",
+    )
+    if not result.get("ok"):
+        return result
+    try:
+        data = json.loads(result["data"])
+        if isinstance(data, list) and data:
+            return _ok(data[0].get("secretValue", ""))
+        return _ok(str(data))
+    except Exception:
+        return result
+
+
+@mcp.tool()
+def infisical_search_secrets(
+    pattern: str,
+    project_id: str,
+    environment: str = "dev",
+    path: str = "/",
+) -> dict:
+    """Search for secrets whose names match a pattern (case-insensitive substring).
+    Returns matching secret NAMES only — call infisical_get_secret for the value.
+    Examples: search 'ssh' to find SSH keys, 'db' for database passwords,
+    'vm-prod' for a specific server's credentials."""
+    result = _infisical(
+        "secrets",
+        "--projectId", project_id,
+        "--env", environment,
+        "--path", path,
+        "-o", "json",
+    )
+    if not result.get("ok"):
+        return result
+    try:
+        secrets = json.loads(result["data"])
+        pattern_lower = pattern.lower()
+        matches = [s["secretKey"] for s in secrets if pattern_lower in s.get("secretKey", "").lower()]
+        if not matches:
+            return _ok(f"No secrets matching '{pattern}' in {environment}{path}")
+        return _ok("\n".join(matches))
+    except Exception:
+        return result
+
+
+@mcp.tool()
+def infisical_export_env(
+    project_id: str,
+    environment: str = "dev",
+    path: str = "/",
+    format: str = "dotenv",
+) -> dict:
+    """Export all secrets as a formatted block for use in scripts or server config.
+    format options: dotenv | json | csv
+    Useful when connecting to a VM/server that needs multiple credentials at once."""
+    return _infisical(
+        "export",
+        "--projectId", project_id,
+        "-e", environment,
+        "--path", path,
+        "-f", format,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
