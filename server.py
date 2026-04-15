@@ -1466,34 +1466,39 @@ def infisical_list_secrets(
     recursive=True (default) also lists secrets in subfolders — secrets are often NOT in root /.
     Call this before infisical_get_secret to find the exact secret name.
     project_id: Codex=f1fa39d6-5411-4671-8f2a-81bfcbb96522 | OERATIONS_VM=263aa831-1c4c-46ef-b042-e3b27278173e | Synapse=c72e3334-f76c-4e1b-8253-42f75a298aad"""
-    token = os.environ.get("INFISICAL_TOKEN", "")
-    headers = {"Authorization": f"Bearer {token}"}
-
     errors = []
+    token = os.environ.get("INFISICAL_TOKEN", "")
+
+    def _curl(url: str) -> dict | None:
+        """Call Infisical API via curl subprocess — avoids Windows urllib SSL/403 issues."""
+        try:
+            r = subprocess.run(
+                ["curl", "-s", "-H", f"Authorization: Bearer {token}", url],
+                capture_output=True, text=True, timeout=15
+            )
+            if r.returncode != 0:
+                errors.append(f"curl failed: {r.stderr.strip()}")
+                return None
+            return json.loads(r.stdout)
+        except Exception as e:
+            errors.append(f"curl error: {e}")
+            return None
 
     def _get_secrets(p: str) -> list[str]:
-        try:
-            import urllib.request, urllib.parse
-            params = urllib.parse.urlencode({"workspaceId": project_id, "environment": environment, "secretPath": p})
-            req = urllib.request.Request(f"{INFISICAL_DOMAIN}/api/v3/secrets/raw?{params}", headers=headers)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read())
-            return [f"{p.rstrip('/')}/{s['secretKey']}" if p != "/" else s["secretKey"] for s in data.get("secrets", [])]
-        except Exception as e:
-            errors.append(f"secrets({p}): {e}")
+        import urllib.parse
+        params = urllib.parse.urlencode({"workspaceId": project_id, "environment": environment, "secretPath": p})
+        data = _curl(f"{INFISICAL_DOMAIN}/api/v3/secrets/raw?{params}")
+        if data is None:
             return []
+        return [f"{p.rstrip('/')}/{s['secretKey']}" if p != "/" else s["secretKey"] for s in data.get("secrets", [])]
 
     def _get_folders(p: str) -> list[str]:
-        try:
-            import urllib.request, urllib.parse
-            params = urllib.parse.urlencode({"workspaceId": project_id, "environment": environment, "path": p})
-            req = urllib.request.Request(f"{INFISICAL_DOMAIN}/api/v1/folders?{params}", headers=headers)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read())
-            return [f"{p.rstrip('/')}/{f['name']}" for f in data.get("folders", [])]
-        except Exception as e:
-            errors.append(f"folders({p}): {e}")
+        import urllib.parse
+        params = urllib.parse.urlencode({"workspaceId": project_id, "environment": environment, "path": p})
+        data = _curl(f"{INFISICAL_DOMAIN}/api/v1/folders?{params}")
+        if data is None:
             return []
+        return [f"{p.rstrip('/')}/{f['name']}" for f in data.get("folders", [])]
 
     all_secrets = _get_secrets(path)
     if recursive:
@@ -1602,6 +1607,7 @@ def ssh_run(
     host: str,
     user: str,
     command: str,
+    key_file: str = "",
     key_secret_name: str = "",
     key_secret_project_id: str = "",
     key_secret_environment: str = "prod",
@@ -1612,20 +1618,18 @@ def ssh_run(
 ) -> dict:
     """Run a command on a remote server via SSH.
 
-    Auth options (use one):
-    1. SSH key from Infisical: set key_secret_name + key_secret_project_id
-       - For ops VM: key_secret_name='OPS_VM_SSH_PRIVATE_KEY', key_secret_project_id='263aa831-1c4c-46ef-b042-e3b27278173e'
-    2. Password: set password=<value>
-    3. Agent/system key: leave key_secret_name and password empty
+    Auth options (use one — prefer key_file for ops VM):
+    1. Local key file (FASTEST): key_file='C:/Users/lauri/.ssh/operations_vm_ed25519'
+       - ops VM: ssh_run('192.168.5.68', 'dbadmin', cmd, key_file='C:/Users/lauri/.ssh/operations_vm_ed25519')
+    2. SSH key from Infisical: set key_secret_name + key_secret_project_id
+    3. Password: set password=<value>
+    4. Agent/system key: leave all auth params empty
 
     The tool handles CRLF stripping and temp file cleanup automatically.
-
-    Example — check ops VM workflow stack:
-      ssh_run('192.168.5.68', 'dbadmin', 'docker ps', key_secret_name='OPS_VM_SSH_PRIVATE_KEY', key_secret_project_id='263aa831-1c4c-46ef-b042-e3b27278173e')
     """
     import tempfile, stat
 
-    key_file = None
+    _temp_key_file = None
     try:
         ssh_cmd = [
             "ssh",
@@ -1635,8 +1639,13 @@ def ssh_run(
             "-p", str(port),
         ]
 
-        # Fetch SSH key from Infisical if specified
-        if key_secret_name and key_secret_project_id:
+        # Auth priority: local key file > Infisical key > password > agent
+        if key_file:
+            # Use local key directly — fastest, no Infisical needed
+            ssh_cmd += ["-i", key_file, "-o", "PasswordAuthentication=no"]
+
+        elif key_secret_name and key_secret_project_id:
+            # Fetch from Infisical and re-wrap base64 at 70 chars
             key_result = infisical_get_secret(
                 secret_name=key_secret_name,
                 project_id=key_secret_project_id,
@@ -1645,18 +1654,18 @@ def ssh_run(
             )
             if not key_result.get("ok"):
                 return _err(f"Failed to fetch SSH key from Infisical: {key_result.get('error')}")
-            key_val = key_result["data"].strip() + "\n"
-
-            # Write to temp file with correct permissions
-            fd, key_file = tempfile.mkstemp(prefix="ssh_key_", suffix=".pem")
+            _raw = key_result["data"].replace("\r\n", "\n").replace("\r", "\n").strip()
+            _klines = _raw.splitlines()
+            _b64 = "".join(_klines[1:-1])
+            _wrapped = "\n".join(_b64[i:i+70] for i in range(0, len(_b64), 70))
+            key_val = _klines[0] + "\n" + _wrapped + "\n" + _klines[-1] + "\n"
+            fd, _temp_key_file = tempfile.mkstemp(prefix="ssh_key_", suffix=".pem")
             os.write(fd, key_val.encode("utf-8"))
             os.close(fd)
-            os.chmod(key_file, stat.S_IRUSR | stat.S_IWUSR)
-            ssh_cmd += ["-i", key_file]
-            ssh_cmd += ["-o", "PasswordAuthentication=no"]
+            os.chmod(_temp_key_file, stat.S_IRUSR | stat.S_IWUSR)
+            ssh_cmd += ["-i", _temp_key_file, "-o", "PasswordAuthentication=no"]
 
         elif password:
-            # Use sshpass if available
             ssh_cmd = ["sshpass", "-p", password] + ssh_cmd
             ssh_cmd += ["-o", "PasswordAuthentication=yes"]
 
@@ -1677,8 +1686,8 @@ def ssh_run(
     except Exception as e:
         return _err(str(e))
     finally:
-        if key_file and os.path.exists(key_file):
-            os.unlink(key_file)
+        if _temp_key_file and os.path.exists(_temp_key_file):
+            os.unlink(_temp_key_file)
 
 
 @mcp.tool()

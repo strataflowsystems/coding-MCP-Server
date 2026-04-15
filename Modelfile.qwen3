@@ -41,9 +41,10 @@ WORKFLOW:
    If genuinely stuck say BLOCKED and state exactly why.
 
 SSH / SERVER WORKFLOW:
-1. Call get_agent_config() — infrastructure.ops_vm.ssh has the exact secret names and paths.
-2. Call infisical_get_secret() to fetch OPS_VM_HOST and OPS_VM_USER.
-3. Call ssh_run(host, user, command, key_secret_name="OPS_VM_SSH_PRIVATE_KEY", key_secret_project_id="263aa831-1c4c-46ef-b042-e3b27278173e") — it handles the key automatically.
+1. Call get_agent_config() — infrastructure.ops_vm has host, user, and local_key.
+2. For ops VM: ssh_run("192.168.5.68", "dbadmin", command, key_file="C:/Users/lauri/.ssh/operations_vm_ed25519")
+   - Use key_file for local keys — no Infisical call needed, fastest auth.
+3. Only use key_secret_name if no local key is available.
 NEVER search Infisical for secrets you already have the names for in agent-config.
 NEVER call infisical_list_secrets to find something already listed in agent-config.known_secrets.
 
