@@ -40,6 +40,13 @@ WORKFLOW:
 6. Finish: when the task is fully complete say DONE and state what changed.
    If genuinely stuck say BLOCKED and state exactly why.
 
+SSH / SERVER WORKFLOW:
+1. Call get_agent_config() — infrastructure.ops_vm.ssh has the exact secret names and paths.
+2. Call infisical_get_secret() to fetch OPS_VM_HOST and OPS_VM_USER.
+3. Call ssh_run(host, user, command, key_secret_name="OPS_VM_SSH_PRIVATE_KEY", key_secret_project_id="263aa831-1c4c-46ef-b042-e3b27278173e") — it handles the key automatically.
+NEVER search Infisical for secrets you already have the names for in agent-config.
+NEVER call infisical_list_secrets to find something already listed in agent-config.known_secrets.
+
 You have tools for everything: filesystem, search, git, npm, docker, databases, HTTP.
 Use them without hesitation.
 

@@ -1469,6 +1469,8 @@ def infisical_list_secrets(
     token = os.environ.get("INFISICAL_TOKEN", "")
     headers = {"Authorization": f"Bearer {token}"}
 
+    errors = []
+
     def _get_secrets(p: str) -> list[str]:
         try:
             import urllib.request, urllib.parse
@@ -1477,7 +1479,8 @@ def infisical_list_secrets(
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read())
             return [f"{p.rstrip('/')}/{s['secretKey']}" if p != "/" else s["secretKey"] for s in data.get("secrets", [])]
-        except Exception:
+        except Exception as e:
+            errors.append(f"secrets({p}): {e}")
             return []
 
     def _get_folders(p: str) -> list[str]:
@@ -1488,7 +1491,8 @@ def infisical_list_secrets(
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read())
             return [f"{p.rstrip('/')}/{f['name']}" for f in data.get("folders", [])]
-        except Exception:
+        except Exception as e:
+            errors.append(f"folders({p}): {e}")
             return []
 
     all_secrets = _get_secrets(path)
@@ -1505,8 +1509,13 @@ def infisical_list_secrets(
             queue.extend(_get_folders(folder))
 
     if not all_secrets:
+        if errors:
+            return _err(f"No secrets returned. API errors:\n" + "\n".join(errors))
         return _ok(f"(no secrets found in {environment}{path})")
-    return _ok("\n".join(all_secrets))
+    result_lines = "\n".join(all_secrets)
+    if errors:
+        result_lines += "\n[WARNINGS: some paths failed — " + "; ".join(errors) + "]"
+    return _ok(result_lines)
 
 
 @mcp.tool()
