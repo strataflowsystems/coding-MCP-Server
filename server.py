@@ -13,6 +13,15 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+# Load .env from the server directory (never committed to git)
+_ENV_FILE = Path(__file__).parent / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 mcp = FastMCP(
     "host-shell",
     host="0.0.0.0",
@@ -1307,6 +1316,10 @@ def _infisical(*args, extra_env: dict | None = None) -> dict:
     """Run the infisical CLI and return structured result."""
     cmd = ["infisical"] + list(args)
     env = os.environ.copy()
+    # Inject machine identity token if available
+    token = os.environ.get("INFISICAL_TOKEN")
+    if token:
+        env["INFISICAL_TOKEN"] = token
     if extra_env:
         env.update(extra_env)
     try:
