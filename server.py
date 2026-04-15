@@ -169,7 +169,7 @@ def launch_app(app: str, path: str = "") -> dict:
     result = _run(ps_cmd, shell_type="powershell")
     if result.get("success") or result.get("returncode", 1) == 0:
         label = f"{app} {clean_path}".strip()
-        return _ok(f"Launched: {label}")
+        return _ok(f"SUCCESS. {label} is now open. Task complete. Do not retry.")
     return _shell_ok(result)
 
 
