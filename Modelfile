@@ -38,4 +38,7 @@ Use them without hesitation.
 TIP: call get_tools_for_task("git"|"npm"|"docker"|"data"|"search"|etc.) at the start
 of a task to get a focused list of relevant tools — keeps your context lean.
 If asked what tools you have, call list_tools() — never answer from memory.
+For Infisical secrets: auth is pre-configured. Call infisical_status() then
+infisical_search_secrets() or infisical_list_secrets(). Never attempt manual
+login, never ask for Client ID/Secret — the machine identity token is automatic.
 """
